@@ -1,7 +1,13 @@
 //TEST:SIMPLE(filecheck=METAL): -stage compute -entry computeMain -target metal
 //TEST:REFLECTION(filecheck=REFLECT): -stage compute -entry computeMain  -target metal
+//TEST:SIMPLE(filecheck=METALASM): -stage compute -entry computeMain -target metallib
+//TEST(compute, metal):COMPARE_COMPUTE(filecheck-buffer=BUF):-metal -compute -entry computeMain -output-using-type
+
+//TEST_INPUT: ubuffer(data=[0 0 0 0], stride=4):out,name outBuffer
+RWStructuredBuffer<float4> outBuffer;
 
 // ------------------------
+// TEST_INPUT: TextureSampler2D(size=4, content = one):name sampler
 Sampler2D sampler;
 
 // METAL-DAG: {{sampler_texture_[1-9]}} {{\[\[}}texture(0)]]
@@ -14,6 +20,7 @@ Sampler2D sampler;
 // REFLECT: {"kind": "samplerState", "index": 0}
 
 // ------------------------
+// TEST_INPUT: Texture2D(size=4, content = zero):name followingTexture
 Texture2D followingTexture;
 
 // METAL-DAG: {{followingTexture_[1-9]}} {{\[\[}}texture(1)]]
@@ -23,6 +30,7 @@ Texture2D followingTexture;
 // REFLECT: "binding": {"kind": "shaderResource", "index": 1}
 
 // ------------------------
+//TEST_INPUT: Sampler(filteringMode=point):name followingSamplerState
 SamplerState followingSamplerState;
 
 // METAL-DAG: {{followingSamplerState_[1-9]}} {{\[\[}}sampler(1)]]
@@ -32,6 +40,7 @@ SamplerState followingSamplerState;
 // REFLECT: "binding": {"kind": "samplerState", "index": 1}
 
 // ------------------------
+// TEST_INPUT: TextureSampler2D(size=4, content = one):name explicitBindingSampler
 Sampler2D explicitBindingSampler : register(t4): register(s3);
 
 // METAL-DAG: {{explicitBindingSampler_texture_[1-9]}} {{\[\[}}texture(4)]]
@@ -43,7 +52,11 @@ Sampler2D explicitBindingSampler : register(t4): register(s3);
 // REFLECT-NOT:}
 // REFLECT: {"kind": "samplerState", "index": 3}
 
+
+[numthreads(1,1,1)]
 float4 computeMain() : SV_Target
 {
-    return sampler.Sample(float2(0, 0)) + explicitBindingSampler.Sample(float2(0, 0)) + followingTexture.Sample(followingSamplerState, float2(0,0));
+    float4 o = sampler.Sample(float2(0, 0)) + explicitBindingSampler.Sample(float2(0, 0)) + followingTexture.Sample(followingSamplerState, float2(0,0));
+    outBuffer[0] =  o;
+    return o;
 }
