@@ -766,6 +766,16 @@ ISlangUnknown* ReplayContext::getProxy(uint64_t handle) const
     return *obj;
 }
 
+void ReplayContext::mapHandleToObject(uint64_t handle, ISlangUnknown* obj)
+{
+    if (handle == kNullHandle || !obj)
+        return;
+    m_handleToObject[handle] = obj;
+    m_objectToHandle[obj] = handle;
+    if (handle >= m_nextHandle)
+        m_nextHandle = handle + 1;
+}
+
 // =============================================================================
 // Playback Dispatcher
 // =============================================================================
@@ -794,13 +804,6 @@ bool ReplayContext::executeNextCall()
     if (signature == nullptr)
         return false;
 
-    // Look up the handler
-    PlaybackHandler* handler = m_handlers.tryGetValue(String(signature));
-    if (!handler)
-    {
-        throw Slang::Exception(String("No handler registered for function: ") + signature);
-    }
-
     // Read the 'this' pointer handle (recorded by beginCall)
     uint64_t thisHandle = kNullHandle;
     TypeId typeId = readTypeId();
@@ -816,11 +819,30 @@ bool ReplayContext::executeNextCall()
     // Store the current 'this' handle for the handler to use
     m_currentThisHandle = thisHandle;
 
-    // Seek back to the start of the command before calling the handler.
-    m_stream.seek(streamPos);
-
-    // Call the handler - it will read the remaining arguments from the stream
-    (*handler)(*this);
+    // Look up the handler
+    PlaybackHandler* handler = m_handlers.tryGetValue(String(signature));
+    if (handler)
+    {
+        // Internal (Slang) handler: seek back to start so the handler re-reads
+        // the signature and 'this' handle via its RECORD_CALL() macro.
+        m_stream.seek(streamPos);
+        (*handler)(*this);
+    }
+    else if (m_externalHandler)
+    {
+        // External handler (e.g., slang-rhi): signature and 'this' handle have
+        // already been consumed. The handler reads remaining arguments directly
+        // via the slangReplay_readXxx() public API.
+        if (!m_externalHandler(signature))
+        {
+            throw Slang::Exception(
+                String("External handler did not recognize function: ") + signature);
+        }
+    }
+    else
+    {
+        throw Slang::Exception(String("No handler registered for function: ") + signature);
+    }
 
     return true;
 }

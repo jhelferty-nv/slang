@@ -420,7 +420,7 @@ if(SLANG_ENABLE_REPLAYER)
         EXECUTABLE
         # Note: replay-context sources are already compiled into the slang library,
         # so we only add include directories here, not EXTRA_SOURCE_DIRS
-        LINK_WITH_PRIVATE core compiler-core slang
+        LINK_WITH_PRIVATE core compiler-core slang slang-rhi
         INCLUDE_DIRECTORIES_PUBLIC
             ${slang_SOURCE_DIR}/source/slang-record-replay
         FOLDER test

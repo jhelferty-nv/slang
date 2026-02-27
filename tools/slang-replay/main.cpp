@@ -1,6 +1,7 @@
 #include "../../source/core/slang-io.h"
 #include "../../source/slang-record-replay/replay-context.h"
 #include "../../source/slang-record-replay/replay-stream-decoder.h"
+#include "../../external/slang-rhi/src/replay-layer/rhi-replay.h"
 
 #include <memory>
 #include <stdio.h>
@@ -197,6 +198,8 @@ int main(int argc, char* argv[])
             }
 
             printf("Loading replay from: %s\n", streamPath.getBuffer());
+
+            rhi::replay::registerHandlers();
 
             // Load and execute the replay
             SlangResult loadResult =

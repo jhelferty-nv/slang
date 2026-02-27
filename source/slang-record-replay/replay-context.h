@@ -393,6 +393,35 @@ public:
         recordInterfaceImpl<ISlangUnknown>(RecordFlag::Input, thisUnknown);
     }
 
+    /// Begin recording a method call with a pre-normalized signature string.
+    /// Unlike beginCall(), this skips parseSignature() and uses the signature as-is.
+    /// Designed for external recording layers (e.g., slang-rhi) that use explicit
+    /// interface-based signatures like "IDevice::createTexture" for stability and
+    /// overload disambiguation.
+    template<typename T>
+    inline void beginCallWithSignature(const char* signature, T* thisPtr)
+    {
+        ensureInitialized();
+        if (!isActive())
+            return;
+        if (isRecordingSuppressed())
+            return;
+
+        if (m_ttyLogging)
+            logCall(signature, thisPtr);
+
+        ISlangUnknown* thisUnknown = toSlangUnknown(thisPtr);
+
+        if (isWriting())
+        {
+            writeIndexEntry();
+        }
+
+        const char* sig = signature;
+        record(RecordFlag::Output, sig);
+        recordInterfaceImpl<ISlangUnknown>(RecordFlag::Input, thisUnknown);
+    }
+
     /// Begin recording a static/free function call.
     /// Records only the function signature.
     /// Also writes an index entry to the index stream for quick navigation.
@@ -416,6 +445,27 @@ public:
             writeIndexEntry();
 
         record(RecordFlag::Input, parsed);
+        uint64_t nh = kNullHandle;
+        recordHandle(RecordFlag::Input, nh);
+    }
+
+    /// Begin recording a static/free function call with a pre-normalized signature.
+    /// Unlike beginStaticCall(), this skips parseSignature() and uses the signature as-is.
+    void beginStaticCallWithSignature(const char* signature)
+    {
+        ensureInitialized();
+        if (!isActive())
+            return;
+        if (isRecordingSuppressed())
+            return;
+
+        if (m_ttyLogging)
+            logCall(signature, (ISlangUnknown*)nullptr);
+
+        if (isWriting())
+            writeIndexEntry();
+
+        record(RecordFlag::Input, signature);
         uint64_t nh = kNullHandle;
         recordHandle(RecordFlag::Input, nh);
     }
@@ -517,6 +567,28 @@ public:
     // Object handles (COM interface pointers mapped to IDs)
     // Public for testing purposes
     SLANG_API void recordHandle(RecordFlag flags, uint64_t& handleId);
+
+    /// Record an arbitrary POD struct as a raw binary blob.
+    /// The struct is prefixed with its size so the replay tool can skip unknown types.
+    /// Used by external recording layers (e.g., slang-rhi) for their own struct types.
+    template<typename T>
+    inline void recordPOD(RecordFlag flags, const T& value)
+    {
+        if (!isActive())
+            return;
+        uint32_t size = static_cast<uint32_t>(sizeof(T));
+        record(flags, size);
+        recordRaw(flags, const_cast<void*>(static_cast<const void*>(&value)), sizeof(T));
+    }
+
+    /// Non-template overload for recording POD from a void pointer and explicit size.
+    inline void recordPOD(RecordFlag flags, const void* data, uint32_t size)
+    {
+        if (!isActive())
+            return;
+        record(flags, size);
+        recordRaw(flags, const_cast<void*>(data), size);
+    }
 
     // ==========================================================================
     // Proxy <-> Implementation Mapping
@@ -627,6 +699,12 @@ public:
     /// The signature should match what __FUNCSIG__ or __PRETTY_FUNCTION__ produces.
     SLANG_API void registerHandler(const char* signature, PlaybackHandler handler);
 
+    /// External handler callback type for signatures not handled by Slang's replay.
+    using ExternalHandler = bool (*)(const char* signature);
+
+    /// Set an external handler for unknown call signatures.
+    SLANG_API void setExternalHandler(ExternalHandler handler) { m_externalHandler = handler; }
+
     /// Execute the next recorded call from the stream.
     /// Reads the function signature, looks up the handler, and calls it.
     /// Returns true if a call was executed, false if at end of stream.
@@ -641,6 +719,15 @@ public:
     /// Get the 'this' handle for the current call being executed.
     /// Only valid within a playback handler.
     SLANG_API uint64_t getCurrentThisHandle() const { return m_currentThisHandle; }
+
+    /// Read raw bytes from the stream (for POD deserialization).
+    inline void readRawBytes(void* outData, size_t size)
+    {
+        m_stream.read(outData, size);
+    }
+
+    /// Map a recorded handle ID to a live object during replay.
+    SLANG_API void mapHandleToObject(uint64_t handle, ISlangUnknown* obj);
 
     /// Get the 'this' pointer for the current call, cast to the given type.
     /// Only valid within a playback handler.
@@ -721,6 +808,9 @@ private:
 
     // Current 'this' handle during playback execution
     uint64_t m_currentThisHandle = kNullHandle;
+
+    // External handler for signatures not in m_handlers (e.g., slang-rhi)
+    ExternalHandler m_externalHandler = nullptr;
 };
 
 // Template implementations
