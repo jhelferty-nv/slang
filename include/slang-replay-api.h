@@ -7,7 +7,7 @@
 /// All functions operate on the process-wide ReplayContext singleton.
 /// They are only valid during playback mode (when executeNextCall() is running).
 
-#include "slang.h"
+#include <slang.h>
 
 #include <cstddef>
 #include <cstdint>

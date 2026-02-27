@@ -7,7 +7,7 @@
 /// All functions operate on the process-wide ReplayContext singleton.
 /// When recording is inactive, each function is a fast no-op.
 
-#include "slang.h"
+#include <slang.h>
 
 #include <cstddef>
 #include <cstdint>
