@@ -898,6 +898,21 @@ struct LoweredElementTypeContext
         }
         if (loweredTypeInfo.tryGetValue(type, info))
             return info;
+
+        // Pre-populate cache with identity mapping as a sentinel to break cycles
+        // from buffer-indirected recursive types (e.g. struct A { RWStructuredBuffer<B> }
+        // + struct B { A a; }). Re-entrant calls hit this sentinel and return "no change".
+        //
+        // Note: if mutual recursion with non-trivial lowering were reachable, the
+        // identity sentinel could leak stale (un-lowered) types into dependent structs.
+        // This is safe in practice because the front-end rejects recursive structured
+        // buffer element types (validateStructuredBufferElementType calls
+        // containsRecursiveType, which unwraps resource types to detect cycles).
+        // See tests/diagnostics/structuredbuffer-resource-struct-recursive*.slang.
+        info.originalType = type;
+        info.loweredType = type;
+        loweredTypeInfo.set(type, info);
+
         info = getLoweredTypeInfoImpl(type, config);
         IRSizeAndAlignment sizeAlignment;
         getSizeAndAlignment(
