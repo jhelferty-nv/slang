@@ -2956,6 +2956,16 @@ struct MetalParameterBlockElementTypeLoweringPolicy : DefaultBufferElementTypeLo
                 info.convertOriginalToLowered = kIROp_CastResourceToDescriptorHandle;
                 return info;
             }
+            // Only lower multi-level pointers (e.g. int**, int***) to ulong.
+            // Single-level pointers (e.g. int*) are valid as `device int*` in Metal
+            // argument buffer structs and are preserved as typed pointers, matching
+            // the behavior in MetalBufferElementTypeLoweringPolicy for constant buffers.
+            // See also: MetalBufferElementTypeLoweringPolicy::lowerLeafLogicalType.
+            if (auto ptrType = as<IRPtrType>(type))
+            {
+                if (as<IRPtrType>(ptrType->getValueType()))
+                    return makeMetalPointerAsUInt64Info(type);
+            }
         }
         return DefaultBufferElementTypeLoweringPolicy::lowerLeafLogicalType(type, config);
     }
