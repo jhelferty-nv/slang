@@ -410,6 +410,29 @@ void maybeAddPhysicalTypeDecoration(IRBuilder& builder, IRInst* type, TypeLoweri
         builder.addPhysicalTypeDecoration(type);
 }
 
+static bool metalContainsMultiLevelPointerImpl(IRType* type, HashSet<IRType*>& visited)
+{
+    if (auto ptrType = as<IRPtrType>(type))
+        return as<IRPtrType>(ptrType->getValueType()) != nullptr;
+    if (auto structType = as<IRStructType>(type))
+    {
+        if (!visited.add(type))
+            return false;
+        for (auto field : structType->getFields())
+            if (metalContainsMultiLevelPointerImpl(field->getFieldType(), visited))
+                return true;
+    }
+    if (auto arrayType = as<IRArrayType>(type))
+        return metalContainsMultiLevelPointerImpl(arrayType->getElementType(), visited);
+    return false;
+}
+
+static bool metalContainsMultiLevelPointer(IRType* type)
+{
+    HashSet<IRType*> visited;
+    return metalContainsMultiLevelPointerImpl(type, visited);
+}
+
 struct LoweredElementTypeContext
 {
     static const IRIntegerValue kMaxArraySizeToUnroll = 32;
@@ -870,6 +893,59 @@ struct LoweredElementTypeContext
 
             return info;
         }
+
+        // Metal ParameterBlock: for resource types whose element contains multi-level
+        // pointers, lower those elements before the existing DescriptorHandle wrapping.
+        // E.g. RWStructuredBuffer<int**> has its element rewritten to ulong so the
+        // wrapped result is DescriptorHandle(RWStructuredBuffer<ulong>) instead of
+        // DescriptorHandle(RWStructuredBuffer<int**>). Single-level pointer elements
+        // (e.g. RWStructuredBuffer<int*>) are left to the late pass
+        // (MetalBufferElementTypeLoweringPolicy) since the buffer is in StorageBuffer
+        // address space.
+        if (config.layoutRuleName == IRTypeLayoutRuleName::MetalParameterBlock &&
+            isResourceType(type))
+        {
+            IRType* elemType = nullptr;
+            if (auto builtinGeneric = as<IRBuiltinGenericType>(type))
+                elemType = builtinGeneric->getElementType();
+
+            // Only enter resource-element lowering when the element type actually
+            // contains multi-level pointers. getLoweredTypeInfo always creates a
+            // distinct storage type for structs in non-Natural layouts, even when
+            // no fields change; using it as a guard would cause every
+            // RWStructuredBuffer<SomeStruct> to get a spurious _default variant,
+            // breaking Metal's cross-type struct assignment.
+            if (elemType && metalContainsMultiLevelPointer(elemType))
+            {
+                auto loweredElemInfo = getLoweredTypeInfo(elemType, config);
+                if (loweredElemInfo.loweredType != loweredElemInfo.originalType)
+                {
+                    ShortList<IRInst*> typeOperands;
+                    for (UInt i = 0; i < type->getOperandCount(); i++)
+                        typeOperands.add(type->getOperand(i));
+                    typeOperands[0] = loweredElemInfo.loweredType;
+                    auto resourceTypeForDescriptor = builder.getType(
+                        type->getOp(),
+                        (UInt)typeOperands.getCount(),
+                        typeOperands.getArrayView().getBuffer());
+
+                    auto leafInfo = leafTypeLoweringPolicy->lowerLeafLogicalType(
+                        resourceTypeForDescriptor,
+                        config);
+                    // Override originalType to the logical (user-facing) resource type
+                    // (e.g. RWStructuredBuffer<int*>), not the rebuilt type with lowered
+                    // elements (RWStructuredBuffer<ulong>). This is safe because:
+                    //  - ConversionMethod::apply takes an explicit resultType from the
+                    //    caller, not from this field.
+                    //  - Struct unpack uses field->getFieldType() as the cast result type.
+                    //  - CastDescriptorHandleToResource is a no-op in the Metal emitter.
+                    //  - Cache lookups need the logical type as the key for consistency.
+                    leafInfo.originalType = type;
+                    return leafInfo;
+                }
+            }
+        }
+
         return leafTypeLoweringPolicy->lowerLeafLogicalType(type, config);
     }
 
